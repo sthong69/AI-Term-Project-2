@@ -416,19 +416,18 @@ def select_hexes_by_random(hexes_by_label, current_round):
         if color == 'black':
             if black_connected_areas >= white_connected_areas:
                 if black_connected_areas-white_connected_areas > maximum_number_of_points:
-                    return 10000000000
+                    return 100
             if black_connected_areas < white_connected_areas:
                 if white_connected_areas-black_connected_areas > maximum_number_of_points:
-                    return -10000000000
+                    return -100
         if color == 'white':
             if black_connected_areas >= white_connected_areas:
                 if black_connected_areas-white_connected_areas > maximum_number_of_points:
-                    return -10000000000
+                    return -100
             if black_connected_areas < white_connected_areas:
                 if white_connected_areas-black_connected_areas > maximum_number_of_points:
-                    return 10000000000
+                    return 100
                 
-        # Evaluation function if it is not obviously a win or a lose
         def get_all_possesed_nodes(board_state, color):
             res = []
             for hex in board_state:
@@ -440,14 +439,15 @@ def select_hexes_by_random(hexes_by_label, current_round):
             distance = 0
             for hex1 in hexes:
                 for hex2 in hexes:
-                    distance += abs(hex1[0]-hex2[0]) + abs(hex1[1]-hex2[0])+1
-            return 10000000000/distance        
+                    distance += abs(hex1[0]-hex2[0]) + abs(hex1[1]-hex2[0])
+            return 10-distance        
         
+        # Evaluation function if it is not obviously a win or a lose
         def score_function(color):
             if color == 'white':
-                return white_connected_areas**5 - black_connected_areas**5 + compute_avg_distance(get_all_possesed_nodes(board_state,color))
+                return white_connected_areas - black_connected_areas + compute_avg_distance(get_all_possesed_nodes(board_state,color))
             if color == 'black':
-                return black_connected_areas**5 - white_connected_areas**5 + compute_avg_distance(get_all_possesed_nodes(board_state,color))
+                return black_connected_areas - white_connected_areas + compute_avg_distance(get_all_possesed_nodes(board_state,color))
         
         score = score_function(color)
         #print(color + str(score))
@@ -524,15 +524,13 @@ def select_hexes_by_random(hexes_by_label, current_round):
                 selected_hexes.append(random.choice(available_hexes))
     else:
         board_state = copy.deepcopy(hexagon_board)
-        value, chosen_hexes, label = minimax(board_state, 3, True, current_turn, float('-inf'), float('inf'))
-        print("Best final game state evaluation: "+ str(value))
-        print(chosen_hexes)
-        print(label)
+        value, chosen_hexes, label = minimax(board_state, 5, True, current_turn, float('-inf'), float('inf'))
         
         for final_couple in hexes_by_label[label]:
             pos, hex_info = final_couple
             if pos in chosen_hexes:
                 selected_hexes.append((pos,hex_info))
+        print(selected_hexes)
     return selected_hexes
 
 # {(-1, -1): {'x': 316.8615612366939, 'y': 252.0, 'label': 2, 'selected': False, 'owner': None}

@@ -233,9 +233,9 @@ def display_remaining_hexes():
     
     # Output the remaining count for each label
     all_selected = True
-    print("Remaining hexes by label:")
+    #print("Remaining hexes by label:")
     for label, count in sorted(remaining_counts.items()):
-        print(f"Label {label}: {count}")
+        #print(f"Label {label}: {count}")
         if count > 0:
             all_selected = False
             # break
@@ -326,33 +326,267 @@ def reset_round_state():
     pygame.display.flip()
 
 def select_hexes_by_random(hexes_by_label, current_round):
+    import numpy as np
+    from collections import defaultdict
+    import time
+
+    import math
+    import random
+    
+    def combinations(iterable, r):
+        pool = tuple(iterable)
+        n = len(pool)
+        if r > n:
+            return
+        indices = list(range(r))
+        yield tuple(pool[i] for i in indices)
+        while True:
+            for i in reversed(range(r)):
+                if indices[i] != i + n - r:
+                    break
+            else:
+                return
+            indices[i] += 1
+            for j in range(i+1, r):
+                indices[j] = indices[j-1] + 1
+            yield tuple(pool[i] for i in indices)
+            
+    class MCTS:
+        def __init__(self, exploration_weight=1):
+            self.Q = defaultdict(int)  # total reward of each node
+            self.N = defaultdict(int)  # total visit count for each node
+            self.children = dict()  # children of each node
+            self.exploration_weight = exploration_weight
+
+        def choose(self, node):
+            "Choose the best successor of node. (Choose a move in the game)"
+            if node.is_terminal():
+                raise RuntimeError(f"choose called on terminal node {node}")
+
+            if node not in self.children:
+                return node.find_random_child()
+
+            def score(n):
+                if self.N[n] == 0:
+                    return float("-inf")  # avoid unseen moves
+                return self.Q[n] / self.N[n]  # average reward
+
+            return max(self.children[node], key=score)
+
+        def do_rollout(self, node):
+            "Make the tree one layer better. (Train for one iteration.)"
+            path = self._select(node)
+            leaf = path[-1]
+            self._expand(leaf)
+            reward = self._simulate(leaf)
+            self._backpropagate(path, reward)
+
+        def _select(self, node):
+            "Find an unexplored descendent of `node`"
+            path = []
+            while True:
+                path.append(node)
+                if node not in self.children or not self.children[node]:
+                    # node is either unexplored or terminal
+                    return path
+                unexplored = self.children[node] - self.children.keys()
+                if unexplored:
+                    n = unexplored.pop()
+                    path.append(n)
+                    return path
+                node = self._uct_select(node)  # descend a layer deeper
+
+        def _expand(self, node):
+            "Update the `children` dict with the children of `node`"
+            if node in self.children:
+                return  # already expanded
+            self.children[node] = node.find_children()
+
+        def _simulate(self, node):
+            "Returns the reward for a random simulation (to completion) of `node`"
+            invert_reward = True
+            while True:
+                if node.is_terminal():
+                    reward = node.reward()
+                    return 1 - reward if invert_reward else reward
+                node = node.find_random_child()
+                invert_reward = not invert_reward
+
+        def _backpropagate(self, path, reward):
+            "Send the reward back up to the ancestors of the leaf"
+            for node in reversed(path):
+                self.N[node] += 1
+                self.Q[node] += reward
+                reward = 1 - reward  # 1 for me is 0 for my enemy, and vice versa
+
+        def _uct_select(self, node):
+            "Select a child of node, balancing exploration & exploitation"
+
+            # All children of node should already be expanded:
+            assert all(n in self.children for n in self.children[node])
+
+            log_N_vertex = math.log(self.N[node])
+
+            def uct(n):
+                "Upper confidence bound for trees"
+                return self.Q[n] / self.N[n] + self.exploration_weight * math.sqrt(
+                    log_N_vertex / self.N[n]
+                )
+
+            return max(self.children[node], key=uct)
+        
+    class BoardState:
+        def __init__(self, new_board_state, new_color, new_winner, new_moves):
+            self.board_state = new_board_state
+            self.color = new_color
+            self.winner = new_winner
+            self.moves = new_moves
+        
+        def get_moves_by_label(self):
+            moves_by_label = {}
+            for pos, info in self.board_state.items():
+                if not info.get('booked', False):
+                    label = info['label']
+                    if label in moves_by_label:
+                        moves_by_label[label].append((pos, info))
+                    else:
+                        moves_by_label[label] = [(pos, info)]
+            return moves_by_label
+        
+        def get_new_state(self, moves, color):
+            import copy 
+            res = copy.deepcopy(self.board_state)
+            for hex in moves:
+                res[hex]['selected'] = True
+                res[hex]['booked'] = True
+                res[hex]['owner'] = color
+            if color == 'white':
+                new_color = 'black'
+            if color == 'black':
+                new_color = 'white'
+            return BoardState(res, new_color, not self.winner, moves)
+        
+        def get_possible_moves(self):
+            moves_by_label = self.get_moves_by_label()
+            possible_moves = set()
+            for label in moves_by_label:
+                available_hexes = [couple[0] for couple in moves_by_label[label]]
+                for limit in range(1,int(label)+1):
+                    possibilities = list(combinations(available_hexes, limit))
+                    for possibility in possibilities:
+                        possible_moves.add(self.get_new_state(possibility, self.color))
+            return possible_moves
+        
+        def find_children(self):
+            if self.is_terminal():
+                return set()
+            else:
+                return self.get_possible_moves()
+        
+        def find_random_child(self):
+            import random
+            moves_by_label = self.get_moves_by_label()
+            possible_moves = []
+            for label in moves_by_label:
+                available_hexes = [couple[0] for couple in moves_by_label[label]]
+                for limit in range(1,int(label)+1):
+                    possibilities = list(combinations(available_hexes, limit))
+                    possible_moves += possibilities
+            sorted_moves = sorted(possible_moves, key=len)[::-1]
+            sorted_moves_trim = sorted_moves[:10]
+            random_move = random.choice(sorted_moves_trim)
+            return self.get_new_state(random_move, self.color)
+        
+        def is_terminal(self):
+            board_size = len(self.board_state)
+            res = 0
+            for hex in self.board_state:
+                if self.board_state[hex]['selected']:
+                    res +=1
+            return res == board_size
+
+        def calculate_connected_areas_v2(self, board_state, color):
+            def dfs(row, col, visited):
+                if (row, col) in visited or not (row, col) in board_state or board_state[(row, col)]['owner'] != color:
+                    return 0
+                visited.add((row, col))
+                count = 1
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (1, -1)]:
+                    next_row, next_col = row + dr, col + dc
+                    count += dfs(next_row, next_col, visited)
+                return count
+
+            visited = set()
+            max_area = 0
+            for (row, col), info in board_state.items():
+                if (row, col) not in visited and info['owner'] == color:
+                    area = dfs(row, col, visited)
+                    if area > max_area:
+                        max_area = area
+            return max_area
+        
+        def reward(self):
+            black_connected_areas = self.calculate_connected_areas_v2(self.board_state, 'black')
+            white_connected_areas = self.calculate_connected_areas_v2(self.board_state, 'white')
+            
+            if black_connected_areas == white_connected_areas:
+                return 0.5
+            
+            if self.color == 'white':
+                if self.winner:
+                    if white_connected_areas>black_connected_areas:
+                        return 1
+                    else:
+                        return 0
+                else:
+                    if white_connected_areas>black_connected_areas:
+                        return 0
+                    else:
+                        return 1
+                    
+            if self.color == 'black':
+                if self.winner:
+                    if black_connected_areas>white_connected_areas:
+                        return 1
+                    else:
+                        return 0
+                else:
+                    if black_connected_areas>white_connected_areas:
+                        return 0
+                    else:
+                        return 1
+                    
+        def __hash__(self):
+            return hash(str(self))
+
+        def __eq__(node1, node2):
+            return node1.board_state == node2.board_state and node1.color == node2.color and node1.winner == node2.winner
+    
     """Selects hexes randomly based on the current round and label availability."""
     selected_hexes = []
-    if current_round == 1:
+    if current_round <= 1:
         # Special handling for the first round: only select one hexagon labeled as 2.
         if 2 in hexes_by_label and any(not hex_info['selected'] for _, hex_info in hexes_by_label[2]):
             available_hexes = [(pos, hex_info) for pos, hex_info in hexes_by_label[2] if not hex_info['selected']]
             if available_hexes:
                 selected_hexes.append(random.choice(available_hexes))
-    else:
-        # Calculate remaining unselected hexes for each label and choose only those labels with remaining hexes
-        available_labels = {
-            label: hexes
-            for label, hexes in hexes_by_label.items()
-            if any(not hex_info['selected'] for _, hex_info in hexes)
-        }
-        if available_labels:
-            selected_label = random.choice(list(available_labels.keys()))
-            available_hexes = [(pos, hex_info) for pos, hex_info in available_labels[selected_label] if not hex_info['selected']]
-            n = selected_label  # Determine the number of hexagons to select based on their labels.
-        
-            # Randomly select n hexes, select all remaining hexes if fewer than n are available
-            if len(available_hexes) > n:
-                selected_hexes.extend(random.sample(available_hexes, n))
-            else:
-                selected_hexes.extend(available_hexes)
 
-        print(current_round)
+    else:
+        import copy
+        board_state = BoardState(copy.deepcopy(hexagon_board), current_turn, True, [])
+        search_tree = MCTS()
+        for i in range(2):
+            print("Starting MCTS rollout n°"+str(i+1)+"...")
+            search_tree.do_rollout(board_state)
+            print("Finished MCTS rollout n°"+str(i+1)+" !")
+        best_next_boardstate = search_tree.choose(board_state)
+        chosen_hexes = best_next_boardstate.moves
+        label = best_next_boardstate.board_state[chosen_hexes[0]]['label']
+
+        for final_couple in hexes_by_label[label]:
+            pos, hex_info = final_couple
+            if pos in chosen_hexes:
+                selected_hexes.append((pos,hex_info))
     return selected_hexes
 
     
@@ -412,7 +646,8 @@ def main(black_player, white_player):
                 pygame.quit()
                 sys.exit()
             elif event.type == KEEP_ALIVE_EVENT:
-                print("Keep alive event triggered.")
+                break
+                #print("Keep alive event triggered.")
                 
             # Handle mouse click events for players set as "Human"
             if event.type == pygame.MOUSEBUTTONUP:

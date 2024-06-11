@@ -159,7 +159,7 @@ def check_all_hexes_selected():
 def calculate_connected_areas(color):
     """Calculates the largest connected area of hexes of the specified color."""
     def dfs(row, col, visited):
-        if (row, col) in visited or not (row, col) in hexagon_board or hexagon_board[(row, col)]['label'] != color:
+        if (row, col) in visited or not (row, col) in hexagon_board or hexagon_board[(row, col)]['owner'] != color:
             return 0
         visited.add((row, col))
         count = 1
@@ -171,7 +171,7 @@ def calculate_connected_areas(color):
     visited = set()
     max_area = 0
     for (row, col), info in hexagon_board.items():
-        if (row, col) not in visited and info['label'] == color:
+        if (row, col) not in visited and info['owner'] == color:
             area = dfs(row, col, visited)
             if area > max_area:
                 max_area = area
@@ -352,19 +352,19 @@ def select_hexes_by_random(hexes_by_label, current_round):
             yield tuple(pool[i] for i in indices)
             
     class MCTS:
-        def __init__(self, exploration_weight=1):
-            self.Q = defaultdict(int)  # total reward of each node
-            self.N = defaultdict(int)  # total visit count for each node
-            self.children = dict()  # children of each node
-            self.exploration_weight = exploration_weight
+        def __init__(self):
+            # We keep track of the score and number of visits of each BoardState Node
+            self.Q = defaultdict(int)
+            self.N = defaultdict(int)
+            self.children = dict() 
 
         def choose(self, node):
-            "Choose the best successor of node. (Choose a move in the game)"
+            # We choose one of the node's children
             if node.is_terminal():
                 raise RuntimeError(f"choose called on terminal node {node}")
 
             if node not in self.children:
-                return node.find_random_child()
+                return node.select_child()
 
             def score(n):
                 if self.N[n] == 0:
@@ -373,66 +373,58 @@ def select_hexes_by_random(hexes_by_label, current_round):
 
             return max(self.children[node], key=score)
 
-        def do_rollout(self, node):
-            "Make the tree one layer better. (Train for one iteration.)"
+        # Grows the search tree for one more iteration
+        def iterate(self, node):
             path = self._select(node)
             leaf = path[-1]
             self._expand(leaf)
             reward = self._simulate(leaf)
             self._backpropagate(path, reward)
 
+        # Selects an unexplored child node of a given node of the search tree
         def _select(self, node):
-            "Find an unexplored descendent of `node`"
             path = []
             while True:
                 path.append(node)
                 if node not in self.children or not self.children[node]:
-                    # node is either unexplored or terminal
                     return path
                 unexplored = self.children[node] - self.children.keys()
                 if unexplored:
                     n = unexplored.pop()
                     path.append(n)
                     return path
-                node = self._uct_select(node)  # descend a layer deeper
+                node = self._uct_select(node)
 
+        # Registers all children nodes of a given node 
         def _expand(self, node):
-            "Update the `children` dict with the children of `node`"
             if node in self.children:
                 return  # already expanded
             self.children[node] = node.find_children()
 
+        # Simulates a game outcome from a given node
         def _simulate(self, node):
-            "Returns the reward for a random simulation (to completion) of `node`"
             invert_reward = True
             while True:
                 if node.is_terminal():
                     reward = node.reward()
                     return 1 - reward if invert_reward else reward
-                node = node.find_random_child()
+                node = node.select_child()
                 invert_reward = not invert_reward
 
+        # Backpropagates the score back up to all ancestors registered in the path
         def _backpropagate(self, path, reward):
-            "Send the reward back up to the ancestors of the leaf"
             for node in reversed(path):
                 self.N[node] += 1
                 self.Q[node] += reward
-                reward = 1 - reward  # 1 for me is 0 for my enemy, and vice versa
+                reward = 1 - reward
 
-        def _uct_select(self, node):
-            "Select a child of node, balancing exploration & exploitation"
-
-            # All children of node should already be expanded:
-            assert all(n in self.children for n in self.children[node])
-
+        # Selects a children node based on the UCT metric
+        def uct_select(self, node):
             log_N_vertex = math.log(self.N[node])
-
             def uct(n):
-                "Upper confidence bound for trees"
-                return self.Q[n] / self.N[n] + self.exploration_weight * math.sqrt(
+                return self.Q[n] / self.N[n] + math.sqrt(2) * math.sqrt(
                     log_N_vertex / self.N[n]
                 )
-
             return max(self.children[node], key=uct)
         
     class BoardState:
@@ -483,7 +475,7 @@ def select_hexes_by_random(hexes_by_label, current_round):
             else:
                 return self.get_possible_moves()
         
-        def find_random_child(self):
+        def select_child(self):
             import random
             moves_by_label = self.get_moves_by_label()
             possible_moves = []
@@ -575,12 +567,13 @@ def select_hexes_by_random(hexes_by_label, current_round):
         import copy
         board_state = BoardState(copy.deepcopy(hexagon_board), current_turn, True, [])
         search_tree = MCTS()
-        for i in range(2):
-            print("Starting MCTS rollout n°"+str(i+1)+"...")
-            search_tree.do_rollout(board_state)
-            print("Finished MCTS rollout n°"+str(i+1)+" !")
+        timeout_start = time.time()
+        while time.time() < timeout_start + 25:
+            search_tree.iterate(board_state)
+        print("Passed 25s, choosing the best!")
         best_next_boardstate = search_tree.choose(board_state)
         chosen_hexes = best_next_boardstate.moves
+        print(chosen_hexes)
         label = best_next_boardstate.board_state[chosen_hexes[0]]['label']
 
         for final_couple in hexes_by_label[label]:
@@ -690,6 +683,9 @@ def main(black_player, white_player):
                     fill_color = BLACK if current_turn == 'black' else WHITE
                     draw_hexagon(screen, hex_info['x'], hex_info['y'], HEX_SIZE, (128, 128, 128), fill_color, hex_info['label'])
                 
+                
+                print("black connected: "+str(calculate_connected_areas('black')))
+                print("white connected: "+str(calculate_connected_areas('white')))
                 pygame.display.flip()
                 pygame.time.wait(100)  # Wait a second to let players see AI's choice
                 Count_Hexagons_by_Owner()    

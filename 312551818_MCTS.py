@@ -419,7 +419,7 @@ def select_hexes_by_random(hexes_by_label, current_round):
                 reward = 1 - reward
 
         # Selects a children node based on the UCT metric
-        def uct_select(self, node):
+        def _uct_select(self, node):
             log_N_vertex = math.log(self.N[node])
             def uct(n):
                 return self.Q[n] / self.N[n] + math.sqrt(2) * math.sqrt(
@@ -484,9 +484,7 @@ def select_hexes_by_random(hexes_by_label, current_round):
                 for limit in range(1,int(label)+1):
                     possibilities = list(combinations(available_hexes, limit))
                     possible_moves += possibilities
-            sorted_moves = sorted(possible_moves, key=len)[::-1]
-            sorted_moves_trim = sorted_moves[:10]
-            random_move = random.choice(sorted_moves_trim)
+            random_move = random.choice(possible_moves)
             return self.get_new_state(random_move, self.color)
         
         def is_terminal(self):

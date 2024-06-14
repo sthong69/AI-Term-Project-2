@@ -361,7 +361,7 @@ def select_hexes_by_random(hexes_by_label, current_round):
         def choose(self, node):
             # We choose one of the node's children
             if node.is_terminal():
-                raise RuntimeError(f"choose called on terminal node {node}")
+                return
 
             if node not in self.children:
                 return node.select_child()
